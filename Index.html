@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flappy Magma Seahorse</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        body {
+            background-color: #030000;
+            color: #ff3300;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .title-container {
+            text-align: center;
+            margin-bottom: 12px;
+        }
+
+        .title-container h1 {
+            color: #ffffff;
+            font-family: serif;
+            font-size: 28px;
+            letter-spacing: 1px;
+            margin-bottom: 2px;
+        }
+
+        .title-container h2 {
+            color: #ff3300;
+            font-size: 32px;
+            letter-spacing: 2px;
+            text-shadow: 0 0 12px rgba(255, 51, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .game-wrapper {
+            position: relative;
+            border: 3px solid #ff1100;
+            border-radius: 12px;
+            box-shadow: 0 0 35px rgba(255, 0, 0, 0.5), inset 0 0 15px rgba(255, 0, 0, 0.3);
+            overflow: hidden;
+            background: #000;
+        }
+
+        canvas {
+            display: block;
+            background: #0a0002;
+        }
+
+        .controls-hint {
+            margin-top: 12px;
+            color: #ff6666;
+            font-size: 14px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="title-container">
+        <h1>Flappy</h1>
+        <h2>Magma Seahorse 🔥</h2>
+    </div>
+
+    <div class="game-wrapper">
+        <canvas id="gameCanvas" width="800" height="550"></canvas>
+    </div>
+
+    <div class="controls-hint">Press SPACE or CLICK to Swim</div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- Game Constants ---
+        const GRAVITY = 0.4;
+        const JUMP = -8.2;
+        const PIPE_WIDTH = 90;
+        const PIPE_GAP = 220;
+        let PIPE_SPEED = 4.5;
+        const PIXEL = 5;
+        const OVERDRIVE_THRESHOLD = 10;
+        const OVERDRIVE_DURATION = 5000;
+
+        // Seahorse Pixel Art Matrix
+        const pixelArt = [
+            [0,0,1,1,1,0,0],
+            [0,1,1,1,1,1,0],
+            [0,1,0,1,1,1,0],
+            [0,0,1,1,1,0,0],
+            [0,0,0,1,1,1,0],
+            [0,0,1,1,1,1,1],
+            [0,1,1,1,1,0,0],
+            [1,1,1,1,0,0,0],
+            [0,1,1,1,0,0,0],
+            [0,0,1,1,1,0,0],
+            [0,1,1,1,0,0,0],
+            [0,1,1,0,0,0,0]
+        ];
+
+        const BRICK_WIDTH = pixelArt[0].length * PIXEL;
+        const BRICK_HEIGHT = pixelArt.length * PIXEL;
+
+        // --- Game Variables ---
+        let seahorse = {
+            x: 120,
+            y: 250,
+            vy: 0,
+            width: BRICK_WIDTH,
+            height: BRICK_HEIGHT
+        };
+
+        let pipes = [];
+        let particles = [];
+        let bubbles = [];
+        let trail = [];
+        let mountains = [];
+        
+        let score = 0;
+        let combo = 0;
+        let gameOver = false;
+        let overdriveActive = false;
+        let overdriveTime = 0;
+        let screenShake = 0;
+        let frameCount = 0;
+
+        // --- Initialize Background Elements ---
+        for (let i = 0; i < 6; i++) {
+            mountains.push({
+                x: i * 200,
+                width: 250 + Math.random() * 150,
+                height: 180 + Math.random() * 120
+            });
+        }
+
+        for (let i = 0; i < 30; i++) {
+            bubbles.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                size: Math.random() * 3 + 1,
+                speed: Math.random() * 1.5 + 0.5,
+                alpha: Math.random() * 0.5 + 0.2
+            });
+        }
+
+        // --- Controls ---
+        function jump() {
+            if (gameOver) {
+                resetGame();
+                return;
+            }
+            seahorse.vy = JUMP;
+            
+            // Create jump particles
+            for(let i = 0; i < 8; i++) {
+                particles.push({
+                    x: seahorse.x,
+                    y: seahorse.y + seahorse.height,
+                    vx: (Math.random() - 0.5) * 4,
+                    vy: Math.random() * 3 + 1,
+                    size: Math.random() * 4 + 2,
+                    life: 1
+                });
+            }
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' || e.code === 'ArrowUp') {
+                jump();
+            }
+        });
+
+        canvas.addEventListener('mousedown', jump);
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            jump();
+        });
+
+        // --- Spawn Pipe ---
+        function spawnPipe() {
+            const minHeight = 80;
+            const maxHeight = canvas.height - PIPE_GAP - minHeight;
+            const topHeight = Math.floor(Math.random() * (maxHeight - minHeight + 1)) + minHeight;
+
+            pipes.push({
+                x: canvas.width,
+                top: topHeight,
+                bottom: canvas.height - topHeight - PIPE_GAP,
+                passed: false
+            });
+        }
+
+        // --- Reset Game ---
+        function resetGame() {
+            seahorse.y = 250;
+            seahorse.vy = 0;
+            pipes = [];
+            particles = [];
+            trail = [];
+            score = 0;
+            combo = 0;
+            gameOver = false;
+            overdriveActive = false;
+            overdriveTime = 0;
+            PIPE_SPEED = 4.5;
+            spawnPipe();
+        }
+
+        // --- Main Game Loop ---
+        function update() {
+            frameCount++;
+
+            if (screenShake > 0) screenShake--;
+
+            if (overdriveActive) {
+                overdriveTime -= 16;
+                if (overdriveTime <= 0) {
+                    overdriveActive = false;
+                    PIPE_SPEED = 4.5;
+                }
+            }
+
+            if (!gameOver) {
+                // Physics
+                seahorse.vy += GRAVITY;
+                seahorse.y += seahorse.vy;
+
+                // Trail Particles
+                if (frameCount % 2 === 0) {
+                    trail.push({
+                        x: seahorse.x,
+                        y: seahorse.y + seahorse.height / 2,
+                        size: Math.random() * 6 + 3,
+                        alpha: 1
+                    });
+                }
+
+                // Boundaries Check
+                if (seahorse.y + seahorse.height >= canvas.height || seahorse.y <= 0) {
+                    triggerGameOver();
+                }
+
+                // Background Mountains Movement
+                mountains.forEach(m => {
+                    m.x -= 0.8;
+                    if (m.x + m.width < 0) {
+                        m.x = canvas.width;
+                        m.width = 250 + Math.random() * 150;
+                        m.height = 180 + Math.random() * 120;
+                    }
+                });
+
+                // Bubbles Movement
+                bubbles.forEach(b => {
+                    b.y -= b.speed;
+                    if (b.y < 0) {
+                        b.y = canvas.height;
+                        b.x = Math.random() * canvas.width;
+                    }
+                });
+
+                // Spawn Pipes
+                if (pipes.length === 0 || pipes[pipes.length - 1].x < canvas.width - 320) {
+                    spawnPipe();
+                }
+
+                // Update Pipes
+                for (let i = pipes.length - 1; i >= 0; i--) {
+                    let p = pipes[i];
+                    p.x -= PIPE_SPEED;
+
+                    // Collision Detection
+                    if (
+                        seahorse.x + seahorse.width > p.x &&
+                        seahorse.x < p.x + PIPE_WIDTH
+                    ) {
+                        if (
+                            seahorse.y < p.top ||
+                            seahorse.y + seahorse.height > canvas.height - p.bottom
+                        ) {
+                            triggerGameOver();
+                        }
+                    }
+
+                    // Score Increment
+                    if (!p.passed && p.x + PIPE_WIDTH < seahorse.x) {
+                        p.passed = true;
+                        score++;
+                        combo++;
+
+                        // Overdrive Activation Trigger
+                        if (score % OVERDRIVE_THRESHOLD === 0) {
+                            overdriveActive = true;
+                            overdriveTime = OVERDRIVE_DURATION;
+                            PIPE_SPEED = 6.5;
+                            screenShake = 15;
+                        }
+                    }
+
+                    // Remove Out-of-Screen Pipes
+                    if (p.x + PIPE_WIDTH < 0) {
+                        pipes.splice(i, 1);
+                    }
+                }
+            }
+
+            // Update Trail
+            for (let i = trail.length - 1; i >= 0; i--) {
+                trail[i].x -= 2;
+                trail[i].alpha -= 0.04;
+                if (trail[i].alpha <= 0) trail.splice(i, 1);
+            }
+
+            // Update Particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].x += particles[i].vx;
+                particles[i].y += particles[i].vy;
+                particles[i].life -= 0.03;
+                if (particles[i].life <= 0) particles.splice(i, 1);
+            }
+
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        function triggerGameOver() {
+            gameOver = true;
+            screenShake = 20;
+            // Explosion particles
+            for(let i=0; i<30; i++) {
+                particles.push({
+                    x: seahorse.x + seahorse.width/2,
+                    y: seahorse.y + seahorse.height/2,
+                    vx: (Math.random() - 0.5) * 10,
+                    vy: (Math.random() - 0.5) * 10,
+                    size: Math.random() * 6 + 2,
+                    life: 1
+                });
+            }
+        }
+
+        // --- Render Function ---
+        function draw() {
+            ctx.save();
+
+            // Screen Shake Effect
+            if (screenShake > 0) {
+                let rx = (Math.random() - 0.5) * screenShake;
+                let ry = (Math.random() - 0.5) * screenShake;
+                ctx.translate(rx, ry);
+            }
+
+            // Background
+            ctx.fillStyle = overdriveActive ? '#200000' : '#0a0002';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Background Mountains
+            ctx.fillStyle = '#2b0002';
+            mountains.forEach(m => {
+                ctx.beginPath();
+                ctx.moveTo(m.x, canvas.height);
+                ctx.lineTo(m.x + m.width / 2, canvas.height - m.height);
+                ctx.lineTo(m.x + m.width, canvas.height);
+                ctx.closePath();
+                ctx.fill();
+            });
+
+            // Draw Bubbles
+            bubbles.forEach(b => {
+                ctx.fillStyle = `rgba(255, 50, 0, ${b.alpha})`;
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Draw Trail
+            trail.forEach(t => {
+                ctx.fillStyle = `rgba(255, 60, 0, ${t.alpha})`;
+                ctx.beginPath();
+                ctx.arc(t.x, t.y, t.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Draw Pipes
+            pipes.forEach(p => {
+                // Main Pipe Pillar
+                ctx.fillStyle = '#400202';
+                ctx.fillRect(p.x, 0, PIPE_WIDTH, p.top);
+                ctx.fillRect(p.x, canvas.height - p.bottom, PIPE_WIDTH, p.bottom);
+
+                // Glow Brick Accents (Magma Bricks at pipe ends)
+                ctx.fillStyle = '#ff2200';
+                ctx.shadowColor = '#ff0000';
+                ctx.shadowBlur = 12;
+
+                ctx.fillRect(p.x - 5, p.top - 20, PIPE_WIDTH + 10, 20);
+                ctx.fillRect(p.x - 5, canvas.height - p.bottom, PIPE_WIDTH + 10, 20);
+
+                ctx.shadowBlur = 0; // Reset glow
+            });
+
+            // Draw Seahorse Player
+            ctx.shadowColor = overdriveActive ? '#ffaa00' : '#ff2200';
+            ctx.shadowBlur = overdriveActive ? 25 : 15;
+
+            for (let r = 0; r < pixelArt.length; r++) {
+                for (let c = 0; c < pixelArt[r].length; c++) {
+                    if (pixelArt[r][c] === 1) {
+                        ctx.fillStyle = overdriveActive ? '#ffee00' : '#ff3300';
+                        ctx.fillRect(
+                            seahorse.x + c * PIXEL,
+                            seahorse.y + r * PIXEL,
+                            PIXEL,
+                            PIXEL
+                        );
+                    }
+                }
+            }
+            ctx.shadowBlur = 0; // Reset glow
+
+            // Draw Particles
+            particles.forEach(pt => {
+                ctx.fillStyle = `rgba(255, 100, 0, ${pt.life})`;
+                ctx.fillRect(pt.x, pt.y, pt.size, pt.size);
+            });
+
+            // UI - Top HUD Bar
+            ctx.fillStyle = 'rgba(20, 0, 0, 0.7)';
+            ctx.fillRect(15, 15, 260, 35);
+            ctx.fillRect(canvas.width - 150, 15, 135, 35);
+
+            ctx.strokeStyle = '#880000';
+            ctx.strokeRect(15, 15, 260, 35);
+            ctx.strokeRect(canvas.width - 150, 15, 135, 35);
+
+            // UI Text - Overdrive Gauge & Score
+            ctx.font = 'bold 12px monospace';
+            ctx.fillStyle = '#ff5555';
+            ctx.fillText('OVERDRIVE MODE', 25, 30);
+
+            // Overdrive Bar
+            ctx.fillStyle = '#330000';
+            ctx.fillRect(25, 36, 240, 8);
+            let barFill = overdriveActive ? (overdriveTime / OVERDRIVE_DURATION) : (score % OVERDRIVE_THRESHOLD) / OVERDRIVE_THRESHOLD;
+            ctx.fillStyle = overdriveActive ? '#ffcc00' : '#ff2200';
+            ctx.fillRect(25, 36, 240 * barFill, 8);
+
+            // Score & Multiplier Display
+            ctx.font = 'bold 16px sans-serif';
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(score, canvas.width - 130, 38);
+            ctx.fillStyle = '#ff4400';
+            ctx.fillText(overdriveActive ? '2x' : '1x', canvas.width - 60, 38);
+
+            // Game Over Screen
+            if (gameOver) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.font = 'bold 36px serif';
+                ctx.fillStyle = '#ff2200';
+                ctx.textAlign = 'center';
+                ctx.shadowColor = '#ff0000';
+                ctx.shadowBlur = 15;
+                ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 20);
+
+                ctx.font = '18px sans-serif';
+                ctx.fillStyle = '#ffffff';
+                ctx.shadowBlur = 0;
+                ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height / 2 + 20);
+                ctx.fillText('Click or Press SPACE to Restart', canvas.width / 2, canvas.height / 2 + 60);
+                ctx.textAlign = 'left';
+            }
+
+            ctx.restore();
+        }
+
+        // --- Start Game Loop ---
+        spawnPipe();
+        update();
+    </script>
+</body>
+</html>
